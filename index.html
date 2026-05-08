@@ -1,0 +1,448 @@
+<!-- ... existing code ... -->
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>⛏️ マイクラ風 2Dクラフト</title>
+    <!-- ドット絵風のフォントを読み込み -->
+    <link href="https://fonts.googleapis.com/css2?family=DotGothic16&display=swap" rel="stylesheet">
+    <style>
+        /* マイクラ風の全体スタイル */
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #78A7FF; /* マイクラの空色 */
+            font-family: 'DotGothic16', sans-serif; /* ドットフォント */
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            height: 100vh;
+            overflow: hidden;
+            user-select: none;
+            image-rendering: pixelated; /* ドット絵をくっきり表示 */
+        }
+
+        /* 画面上部の説明テキスト */
+        #ui-layer {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            color: white;
+            text-shadow: 2px 2px 0 #3f3f3f;
+            pointer-events: none; /* クリックをすり抜けさせる */
+        }
+
+        h1 {
+            margin: 0;
+            font-size: 24px;
+            letter-spacing: 2px;
+        }
+
+        p {
+            margin: 5px 0 0 0;
+            font-size: 16px;
+        }
+
+        /* フルスクリーンキャンバス */
+        canvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            cursor: crosshair; /* 十字カーソル */
+        }
+
+        /* 画面下部のホットバー（インベントリ枠） */
+        #hotbar {
+            position: absolute;
+            bottom: 20px;
+            display: flex;
+            background-color: rgba(0, 0, 0, 0.4);
+            border: 2px solid #222;
+            padding: 2px;
+            box-shadow: 4px 4px 0 rgba(0,0,0,0.3);
+        }
+
+        .slot {
+            width: 40px;
+            height: 40px;
+            border: 2px solid #888;
+            margin: 2px;
+            background-color: rgba(139, 139, 139, 0.5);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            cursor: pointer;
+            position: relative;
+        }
+
+        /* 選択中のスロットを白枠で強調 */
+        .slot.active {
+            border: 2px solid white;
+            background-color: rgba(255, 255, 255, 0.2);
+            outline: 2px solid #333;
+            outline-offset: -4px;
+        }
+
+        /* スロット内の数字 */
+        .slot-num {
+            position: absolute;
+            top: 2px;
+            left: 4px;
+            color: white;
+            font-size: 12px;
+            text-shadow: 1px 1px 0 black;
+        }
+
+        /* スロット内のブロック画像（Canvasで生成したものを入れる） */
+        .slot canvas {
+            width: 24px;
+            height: 24px;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="ui-layer">
+        <h1>⛏️ マイクラ風 2Dクラフト</h1>
+        <p>左クリック：こわす / 右クリック：おく / 数字キー：もちかえ</p>
+    </div>
+
+    <!-- 画面いっぱいに広がるキャンバス -->
+    <canvas id="gameCanvas"></canvas>
+    
+    <!-- 画面下部のホットバー -->
+    <div id="hotbar">
+        <div class="slot active" data-block="1"><span class="slot-num">1</span></div>
+        <div class="slot" data-block="2"><span class="slot-num">2</span></div>
+        <div class="slot" data-block="3"><span class="slot-num">3</span></div>
+        <div class="slot" data-block="4"><span class="slot-num">4</span></div>
+        <div class="slot" data-block="5"><span class="slot-num">5</span></div>
+        <div class="slot" data-block="6"><span class="slot-num">6</span></div>
+        <div class="slot" data-block="7"><span class="slot-num">7</span></div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+
+        // ブロックの設定
+        const TILE_SIZE = 32; // 1ブロックのピクセル数
+        let COLS, ROWS;
+
+        // ブロックID
+        const BLOCKS = {
+            EMPTY: 0,
+            GRASS: 1,
+            DIRT: 2,
+            STONE: 3,
+            WOOD: 4,   // 原木
+            PLANKS: 5, // 木材
+            LEAVES: 6, // 葉っぱ
+            GLASS: 7   // ガラス
+        };
+
+        // テクスチャをキャッシュするためのオブジェクト
+        const textures = {};
+
+        let selectedBlock = BLOCKS.GRASS;
+        let isBreaking = false; // 左クリック中
+        let isPlacing = false;  // 右クリック中
+        let mouseX = -1;
+        let mouseY = -1;
+        let world = [];
+        let cameraX = 0; // 横スクロール用（今回は固定ですが拡張用に）
+
+        // --- ドット絵風テクスチャの生成関数 ---
+        function generateTextures() {
+            for (let key in BLOCKS) {
+                const id = BLOCKS[key];
+                if (id === 0) continue;
+
+                const tCanvas = document.createElement('canvas');
+                tCanvas.width = 16;  // 内部解像度は16x16（マイクラ基準）
+                tCanvas.height = 16;
+                const tCtx = tCanvas.getContext('2d');
+
+                // ピクセルを描くためのヘルパー関数
+                const putPixel = (x, y, color) => {
+                    tCtx.fillStyle = color;
+                    tCtx.fillRect(x, y, 1, 1);
+                };
+
+                // ベースカラーで塗りつぶし
+                let baseColor, noiseColor1, noiseColor2;
+                
+                switch (id) {
+                    case BLOCKS.DIRT:
+                        tCtx.fillStyle = '#866043'; tCtx.fillRect(0,0,16,16);
+                        for(let i=0; i<40; i++) putPixel(Math.random()*16|0, Math.random()*16|0, '#79553a');
+                        for(let i=0; i<40; i++) putPixel(Math.random()*16|0, Math.random()*16|0, '#9b7451');
+                        break;
+                    case BLOCKS.GRASS:
+                        // 土ベース
+                        tCtx.fillStyle = '#866043'; tCtx.fillRect(0,0,16,16);
+                        for(let i=0; i<30; i++) putPixel(Math.random()*16|0, Math.random()*16|0, '#79553a');
+                        // 草のトップ
+                        tCtx.fillStyle = '#5E9D34'; tCtx.fillRect(0,0,16,4);
+                        for(let i=0; i<20; i++) putPixel(Math.random()*16|0, Math.random()*4|0, '#74B44A');
+                        // 草の垂れ下がり
+                        for(let x=0; x<16; x++) {
+                            if(Math.random()>0.3) putPixel(x, 4, '#5E9D34');
+                            if(Math.random()>0.7) putPixel(x, 5, '#5E9D34');
+                        }
+                        break;
+                    case BLOCKS.STONE:
+                        tCtx.fillStyle = '#7D7D7D'; tCtx.fillRect(0,0,16,16);
+                        for(let i=0; i<60; i++) putPixel(Math.random()*16|0, Math.random()*16|0, '#666666');
+                        for(let i=0; i<30; i++) putPixel(Math.random()*16|0, Math.random()*16|0, '#999999');
+                        break;
+                    case BLOCKS.WOOD:
+                        // 樹皮
+                        tCtx.fillStyle = '#4E3F2E'; tCtx.fillRect(0,0,16,16);
+                        tCtx.fillStyle = '#64543C';
+                        for(let x=0; x<16; x+=2) tCtx.fillRect(x, 0, 1, 16);
+                        for(let i=0; i<20; i++) putPixel(Math.random()*16|0, Math.random()*16|0, '#3A2E20');
+                        break;
+                    case BLOCKS.PLANKS:
+                        tCtx.fillStyle = '#C09E6C'; tCtx.fillRect(0,0,16,16);
+                        tCtx.fillStyle = '#A38150';
+                        tCtx.fillRect(0, 3, 16, 1); tCtx.fillRect(0, 7, 16, 1); tCtx.fillRect(0, 11, 16, 1); tCtx.fillRect(0, 15, 16, 1);
+                        tCtx.fillRect(4, 0, 1, 3); tCtx.fillRect(10, 4, 1, 3); tCtx.fillRect(2, 8, 1, 3); tCtx.fillRect(12, 12, 1, 3);
+                        break;
+                    case BLOCKS.LEAVES:
+                        tCtx.fillStyle = 'rgba(50, 150, 50, 0.9)'; tCtx.fillRect(0,0,16,16);
+                        for(let i=0; i<40; i++) putPixel(Math.random()*16|0, Math.random()*16|0, 'rgba(30, 100, 30, 0.9)');
+                        for(let i=0; i<20; i++) putPixel(Math.random()*16|0, Math.random()*16|0, 'rgba(80, 180, 80, 0.9)');
+                        break;
+                    case BLOCKS.GLASS:
+                        tCtx.fillStyle = 'rgba(150, 220, 255, 0.3)'; tCtx.fillRect(0,0,16,16);
+                        tCtx.strokeStyle = 'rgba(255,255,255,0.8)'; tCtx.lineWidth = 1;
+                        tCtx.strokeRect(0,0,16,16); // 白い枠
+                        // 斜めのハイライト
+                        tCtx.fillStyle = 'rgba(255,255,255,0.6)';
+                        tCtx.fillRect(3, 3, 4, 1); tCtx.fillRect(2, 4, 2, 1);
+                        break;
+                }
+                textures[id] = tCanvas;
+            }
+        }
+
+        // --- ワールド初期化 ---
+        function resizeAndInit() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+            
+            // 描画設定をピクセルアートに最適化（拡大してもぼやけない）
+            ctx.imageSmoothingEnabled = false;
+
+            COLS = Math.ceil(canvas.width / TILE_SIZE);
+            ROWS = Math.ceil(canvas.height / TILE_SIZE);
+
+            world = [];
+            for (let y = 0; y < ROWS; y++) {
+                let row = [];
+                for (let x = 0; x < COLS; x++) {
+                    // 地形生成ルール
+                    let groundLevel = ROWS - 7;
+                    // 少し起伏をつける
+                    groundLevel += Math.floor(Math.sin(x * 0.5) * 1.5);
+
+                    if (y > groundLevel + 3) {
+                        row.push(BLOCKS.STONE); // 深いところは石
+                    } else if (y > groundLevel) {
+                        row.push(BLOCKS.DIRT); // その上は土
+                    } else if (y === groundLevel) {
+                        row.push(BLOCKS.GRASS); // 表面は草
+                    } else {
+                        row.push(BLOCKS.EMPTY); // 空中
+                    }
+                }
+                world.push(row);
+            }
+
+            // 木をいくつか生やす
+            for (let x = 5; x < COLS - 5; x += Math.floor(Math.random() * 8 + 5)) {
+                let y = ROWS - 1;
+                while (y > 0 && world[y][x] !== BLOCKS.GRASS) y--; // 地面を探す
+                
+                if (y > 0) {
+                    const treeHeight = 4 + Math.floor(Math.random() * 2);
+                    // 幹
+                    for (let i = 1; i <= treeHeight; i++) {
+                        if (y - i >= 0) world[y - i][x] = BLOCKS.WOOD;
+                    }
+                    // 葉っぱ
+                    for (let ly = y - treeHeight - 1; ly <= y - treeHeight + 1; ly++) {
+                        for (let lx = x - 2; lx <= x + 2; lx++) {
+                            if (ly >= 0 && lx >= 0 && lx < COLS) {
+                                // 丸みを持たせる角の処理
+                                if (Math.abs(lx - x) === 2 && Math.abs(ly - (y - treeHeight + 1)) === 2) continue;
+                                if (world[ly][lx] === BLOCKS.EMPTY) world[ly][lx] = BLOCKS.LEAVES;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- ホットバー（UI）のセットアップ ---
+        const slots = document.querySelectorAll('.slot');
+        function updateHotbarUI() {
+            slots.forEach(slot => {
+                slot.classList.remove('active');
+                if (parseInt(slot.getAttribute('data-block')) === selectedBlock) {
+                    slot.classList.add('active');
+                }
+            });
+        }
+
+        // ホットバーにテクスチャを描画
+        function setupHotbar() {
+            slots.forEach(slot => {
+                const blockId = parseInt(slot.getAttribute('data-block'));
+                // 各ブロックのアイコンを描画するためのCanvasを追加
+                const iconCanvas = document.createElement('canvas');
+                iconCanvas.width = 16; iconCanvas.height = 16;
+                const iconCtx = iconCanvas.getContext('2d');
+                iconCtx.imageSmoothingEnabled = false;
+                if (textures[blockId]) {
+                    iconCtx.drawImage(textures[blockId], 0, 0);
+                }
+                slot.appendChild(iconCanvas);
+
+                // クリックで選択
+                slot.addEventListener('click', () => {
+                    selectedBlock = blockId;
+                    updateHotbarUI();
+                });
+            });
+        }
+
+        // キーボードでのホットバー選択
+        window.addEventListener('keydown', (e) => {
+            const keyNum = parseInt(e.key);
+            if (keyNum >= 1 && keyNum <= 7) {
+                selectedBlock = keyNum;
+                updateHotbarUI();
+            }
+        });
+
+        // --- マウス入力処理 ---
+        canvas.addEventListener('mousedown', (e) => {
+            if (e.button === 0) isBreaking = true;      // 左クリック：破壊
+            else if (e.button === 2) isPlacing = true;  // 右クリック：設置
+            interactWorld();
+        });
+
+        canvas.addEventListener('mousemove', (e) => {
+            mouseX = e.clientX;
+            mouseY = e.clientY;
+            if (isBreaking || isPlacing) interactWorld();
+        });
+
+        window.addEventListener('mouseup', (e) => {
+            if (e.button === 0) isBreaking = false;
+            else if (e.button === 2) isPlacing = false;
+        });
+
+        // 右クリックメニューを無効化
+        canvas.addEventListener('contextmenu', e => e.preventDefault());
+
+        function interactWorld() {
+            if (mouseX < 0 || mouseY < 0 || mouseX >= canvas.width || mouseY >= canvas.height) return;
+
+            const gridX = Math.floor(mouseX / TILE_SIZE);
+            const gridY = Math.floor(mouseY / TILE_SIZE);
+
+            if (gridX >= 0 && gridX < COLS && gridY >= 0 && gridY < ROWS) {
+                if (isBreaking) {
+                    world[gridY][gridX] = BLOCKS.EMPTY;
+                } else if (isPlacing) {
+                    // すでにブロックがない場所のみ置ける
+                    if (world[gridY][gridX] === BLOCKS.EMPTY) {
+                        world[gridY][gridX] = selectedBlock;
+                    }
+                }
+            }
+        }
+
+        // --- 描画ループ ---
+        // 四角い雲のデータ
+        let clouds = [
+            { x: 100, y: 40, w: 120, h: 40, speed: 0.1 },
+            { x: 500, y: 80, w: 160, h: 50, speed: 0.05 },
+            { x: 900, y: 30, w: 100, h: 30, speed: 0.15 }
+        ];
+
+        function gameLoop() {
+            // 背景（空色）
+            ctx.fillStyle = '#78A7FF';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            // 四角い太陽（マイクラ風）
+            ctx.fillStyle = '#FCE570';
+            ctx.fillRect(canvas.width - 150, 50, 60, 60);
+
+            // 四角い雲
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.8)';
+            clouds.forEach(c => {
+                ctx.fillRect(c.x, c.y, c.w, c.h);
+                // ピクセルアート風の雲の凹凸
+                ctx.fillRect(c.x + 20, c.y - 10, c.w - 40, 10);
+                ctx.fillRect(c.x + 10, c.y + c.h, c.w - 50, 10);
+
+                c.x += c.speed;
+                if (c.x > canvas.width) c.x = -c.w;
+            });
+
+            // ワールドの描画
+            for (let y = 0; y < ROWS; y++) {
+                for (let x = 0; x < COLS; x++) {
+                    const blockId = world[y][x];
+                    if (blockId !== BLOCKS.EMPTY && textures[blockId]) {
+                        // 16x16のテクスチャをTILE_SIZE(32x32)に拡大して描画
+                        ctx.drawImage(textures[blockId], x * TILE_SIZE, y * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+                    }
+                }
+            }
+
+            // カーソルのハイライト（黒い枠線）
+            if (mouseX >= 0 && mouseY >= 0 && mouseX < canvas.width && mouseY < canvas.height) {
+                const gridX = Math.floor(mouseX / TILE_SIZE);
+                const gridY = Math.floor(mouseY / TILE_SIZE);
+                
+                ctx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+                ctx.lineWidth = 2;
+                ctx.strokeRect(gridX * TILE_SIZE, gridY * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+            }
+
+            requestAnimationFrame(gameLoop);
+        }
+
+        // --- 初期化実行 ---
+        generateTextures(); // テクスチャ生成
+        resizeAndInit();    // ワールド生成
+        setupHotbar();      // UI設定
+        gameLoop();         // ループ開始
+
+        // ウィンドウサイズ変更時に再計算
+        window.addEventListener('resize', () => {
+            const oldWorld = world;
+            const oldCols = COLS;
+            const oldRows = ROWS;
+            
+            resizeAndInit();
+            
+            // 以前のワールドデータを復元（左上基準）
+            for(let y=0; y<Math.min(ROWS, oldRows); y++) {
+                for(let x=0; x<Math.min(COLS, oldCols); x++) {
+                    world[y][x] = oldWorld[y][x];
+                }
+            }
+        });
+
+    </script>
+</body>
+</html>
